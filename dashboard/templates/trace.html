@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Trace {{ trace.run_id[:8] }} — AgentLens</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; }
+  .topbar { background: #1a1d2e; border-bottom: 1px solid #2d3748; padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
+  .topbar h1 { font-size: 20px; font-weight: 700; color: #7c3aed; }
+  .nav { display: flex; gap: 4px; margin-left: auto; }
+  .nav a { padding: 6px 14px; border-radius: 6px; text-decoration: none; color: #94a3b8; font-size: 13px; }
+  .nav a:hover { background: #7c3aed22; color: #a78bfa; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 32px; }
+  .back { color: #7c3aed; text-decoration: none; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; margin-bottom: 24px; }
+  .back:hover { color: #a78bfa; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+  .card { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 12px; padding: 24px; }
+  .card h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: #64748b; margin-bottom: 16px; }
+  .meta-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #1e2235; font-size: 13px; }
+  .meta-row:last-child { border-bottom: none; }
+  .meta-row .key { color: #64748b; }
+  .meta-row .val { color: #e2e8f0; font-weight: 500; text-align: right; max-width: 60%; word-break: break-all; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .badge.pass { background: #064e3b; color: #34d399; }
+  .badge.fail { background: #450a0a; color: #f87171; }
+  .score-bar { height: 6px; border-radius: 3px; background: #1e2235; margin-top: 6px; }
+  .score-fill { height: 100%; border-radius: 3px; }
+  .metric-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #1e2235; font-size: 13px; }
+  .metric-row:last-child { border-bottom: none; }
+  .metric-name { flex: 1; color: #94a3b8; }
+  .metric-score { width: 40px; text-align: right; font-weight: 600; }
+  .metric-score.high { color: #34d399; }
+  .metric-score.mid { color: #fbbf24; }
+  .metric-score.low { color: #f87171; }
+  .metric-bar-wrap { width: 100px; }
+  .metric-reason { font-size: 11px; color: #64748b; flex: 2; }
+  .step { background: #12152a; border: 1px solid #1e2235; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+  .step-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .step-idx { background: #7c3aed; color: white; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+  .step-type { font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+  .step-type.llm_call { background: #1e1b4b; color: #a78bfa; }
+  .step-type.tool_call { background: #064e3b; color: #34d399; }
+  .step-type.final_answer { background: #451a03; color: #fb923c; }
+  .step-tool { font-size: 12px; color: #64748b; }
+  .step-latency { margin-left: auto; font-size: 11px; color: #64748b; }
+  .step-io { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .step-io-block { background: #0f1117; border-radius: 6px; padding: 10px 12px; }
+  .step-io-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: #64748b; margin-bottom: 6px; }
+  .step-io-content { font-size: 12px; color: #94a3b8; white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow-y: auto; }
+  .step-error { background: #450a0a22; border: 1px solid #f8717133; border-radius: 6px; padding: 8px 12px; margin-top: 10px; font-size: 12px; color: #f87171; }
+  .output-block { background: #12152a; border: 1px solid #1e2235; border-radius: 8px; padding: 16px; font-size: 13px; color: #94a3b8; white-space: pre-wrap; line-height: 1.6; }
+  .full-width { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>⬡ AgentLens</h1>
+  <nav class="nav">
+    <a href="/">Runs</a>
+    <a href="/regression">Regression</a>
+  </nav>
+</div>
+<div class="container">
+  <a class="back" href="/">← Back to runs</a>
+
+  <div class="grid">
+    <!-- Trace metadata -->
+    <div class="card">
+      <h2>Trace Info</h2>
+      <div class="meta-row"><span class="key">Run ID</span><span class="val" style="font-size:11px">{{ trace.run_id }}</span></div>
+      <div class="meta-row"><span class="key">Agent</span><span class="val">{{ trace.agent_name }}</span></div>
+      <div class="meta-row"><span class="key">Version</span><span class="val">{{ trace.agent_version }}</span></div>
+      <div class="meta-row"><span class="key">Model</span><span class="val">{{ trace.model }}</span></div>
+      <div class="meta-row"><span class="key">Latency</span><span class="val">{{ trace.total_latency_ms }}ms</span></div>
+      <div class="meta-row"><span class="key">Tokens</span><span class="val">{{ trace.total_tokens }} (↑{{ trace.prompt_tokens }} ↓{{ trace.completion_tokens }})</span></div>
+      <div class="meta-row"><span class="key">Cost</span><span class="val">${{ "%.8f"|format(trace.cost_usd) }}</span></div>
+      <div class="meta-row"><span class="key">Steps</span><span class="val">{{ trace.steps|length }}</span></div>
+      <div class="meta-row"><span class="key">Status</span><span class="val">
+        <span class="badge {{ 'pass' if trace.success else 'fail' }}">
+          {{ '✓ SUCCESS' if trace.success else '✗ FAILED' }}
+        </span>
+      </span></div>
+      <div class="meta-row"><span class="key">Timestamp</span><span class="val" style="font-size:11px">{{ trace.timestamp }}</span></div>
+    </div>
+
+    <!-- Eval results -->
+    <div class="card">
+      <h2>Evaluation Results</h2>
+      {% if eval_data %}
+        <div style="margin-bottom:16px;display:flex;align-items:center;gap:12px">
+          <span class="badge {{ 'pass' if eval_data.passed else 'fail' }}">
+            {{ '✓ PASSED' if eval_data.passed else '✗ FAILED' }}
+          </span>
+          <span style="font-size:24px;font-weight:700;color:{% if eval_data.overall_score >= 0.8 %}#34d399{% elif eval_data.overall_score >= 0.6 %}#fbbf24{% else %}#f87171{% endif %}">
+            {{ "%.3f"|format(eval_data.overall_score) }}
+          </span>
+          <span style="color:#64748b;font-size:13px">overall score</span>
+        </div>
+        <div style="margin-bottom:12px">
+          <div style="font-size:11px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.8px">Rule-based</div>
+          {% for r in eval_data.rule_results %}
+          <div class="metric-row">
+            <span style="font-size:14px">{{ '✅' if r.passed else '❌' }}</span>
+            <span class="metric-name">{{ r.metric }}</span>
+            <div class="metric-bar-wrap">
+              <div class="score-bar"><div class="score-fill" style="width:{{ (r.score*100)|int }}%;background:{% if r.score >= 0.8 %}#34d399{% elif r.score >= 0.5 %}#fbbf24{% else %}#f87171{% endif %}"></div></div>
+            </div>
+            <span class="metric-score {% if r.score >= 0.8 %}high{% elif r.score >= 0.5 %}mid{% else %}low{% endif %}">{{ r.score }}</span>
+          </div>
+          {% endfor %}
+        </div>
+        {% if eval_data.judge_results %}
+        <div>
+          <div style="font-size:11px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.8px">LLM Judge</div>
+          {% for j in eval_data.judge_results %}
+          <div class="metric-row">
+            <span style="font-size:14px">{{ '✅' if j.passed else '❌' }}</span>
+            <span class="metric-name">{{ j.metric }}</span>
+            <div class="metric-bar-wrap">
+              <div class="score-bar"><div class="score-fill" style="width:{{ (j.score*100)|int }}%;background:{% if j.score >= 0.8 %}#34d399{% elif j.score >= 0.5 %}#fbbf24{% else %}#f87171{% endif %}"></div></div>
+            </div>
+            <span class="metric-score {% if j.score >= 0.8 %}high{% elif j.score >= 0.5 %}mid{% else %}low{% endif %}">{{ j.score }}</span>
+          </div>
+          <div style="font-size:11px;color:#64748b;padding:4px 0 8px 26px">{{ j.reasoning[:120] }}...</div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      {% else %}
+        <div style="color:#64748b;font-size:13px">No evaluation data for this run.</div>
+      {% endif %}
+    </div>
+
+    <!-- Output -->
+    <div class="card full-width">
+      <h2>Final Output</h2>
+      <div class="output-block">{{ trace.output or "— no output —" }}</div>
+    </div>
+
+    <!-- Steps -->
+    <div class="card full-width">
+      <h2>Execution Steps ({{ trace.steps|length }})</h2>
+      {% for step in trace.steps %}
+      <div class="step">
+        <div class="step-header">
+          <div class="step-idx">{{ step.step_index }}</div>
+          <span class="step-type {{ step.type }}">{{ step.type }}</span>
+          {% if step.tool_name %}<span class="step-tool">🔧 {{ step.tool_name }}</span>{% endif %}
+          <span class="step-latency">{{ step.latency_ms }}ms · {{ step.tokens_used }} tokens</span>
+        </div>
+        <div class="step-io">
+          <div class="step-io-block">
+            <div class="step-io-label">Input</div>
+            <div class="step-io-content">{{ step.input }}</div>
+          </div>
+          <div class="step-io-block">
+            <div class="step-io-label">Output</div>
+            <div class="step-io-content">{{ step.output or "— empty —" }}</div>
+          </div>
+        </div>
+        {% if step.error %}
+        <div class="step-error">⚠ {{ step.error }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+</body>
+</html>

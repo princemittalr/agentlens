@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgentLens — Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+  .topbar { background: #1a1d2e; border-bottom: 1px solid #2d3748; padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
+  .topbar h1 { font-size: 20px; font-weight: 700; color: #7c3aed; letter-spacing: -0.5px; }
+  .topbar span { color: #64748b; font-size: 13px; }
+  .nav { display: flex; gap: 4px; margin-left: auto; }
+  .nav a { padding: 6px 14px; border-radius: 6px; text-decoration: none; color: #94a3b8; font-size: 13px; font-weight: 500; transition: all 0.15s; }
+  .nav a:hover, .nav a.active { background: #7c3aed22; color: #a78bfa; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 32px; }
+  .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 32px; }
+  .stat-card { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 12px; padding: 20px; }
+  .stat-card .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #64748b; margin-bottom: 8px; }
+  .stat-card .value { font-size: 28px; font-weight: 700; color: #e2e8f0; }
+  .stat-card .value.purple { color: #a78bfa; }
+  .stat-card .value.green { color: #34d399; }
+  .stat-card .value.red { color: #f87171; }
+  .section-title { font-size: 14px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 16px; }
+  .card { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 12px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
+  thead { background: #12152a; }
+  th { padding: 12px 16px; text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: #64748b; }
+  td { padding: 12px 16px; font-size: 13px; border-top: 1px solid #1e2235; }
+  tr:hover td { background: #1e2235; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .badge.pass { background: #064e3b; color: #34d399; }
+  .badge.fail { background: #450a0a; color: #f87171; }
+  .badge.none { background: #1e2235; color: #64748b; }
+  .score { font-weight: 600; }
+  .score.high { color: #34d399; }
+  .score.mid { color: #fbbf24; }
+  .score.low { color: #f87171; }
+  .agent-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; background: #1e1b4b; color: #a78bfa; font-weight: 500; }
+  .link { color: #7c3aed; text-decoration: none; font-weight: 500; }
+  .link:hover { color: #a78bfa; text-decoration: underline; }
+  .filter-bar { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; }
+  .filter-bar select { background: #1a1d2e; border: 1px solid #2d3748; color: #e2e8f0; padding: 6px 12px; border-radius: 6px; font-size: 13px; }
+  .filter-bar input { background: #1a1d2e; border: 1px solid #2d3748; color: #e2e8f0; padding: 6px 12px; border-radius: 6px; font-size: 13px; flex: 1; }
+  .filter-bar input::placeholder { color: #64748b; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>⬡ AgentLens</h1>
+  <span>Observability Platform for LLM Agents</span>
+  <nav class="nav">
+    <a href="/" class="active">Runs</a>
+    <a href="/regression">Regression</a>
+  </nav>
+</div>
+
+<div class="container">
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="label">Total Runs</div>
+      <div class="value purple">{{ total_runs }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Evaluated</div>
+      <div class="value">{{ evaluated }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Passed</div>
+      <div class="value green">{{ passed }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Avg Score</div>
+      <div class="value {% if avg_score >= 0.8 %}green{% elif avg_score >= 0.6 %}purple{% else %}red{% endif %}">
+        {{ avg_score }}
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Avg Latency</div>
+      <div class="value">{{ avg_latency }}ms</div>
+    </div>
+  </div>
+
+  <div class="section-title">All Runs</div>
+
+  <div class="filter-bar">
+    <input type="text" id="search" placeholder="Search by agent, query, or run ID..." oninput="filterTable()">
+    <select id="agentFilter" onchange="filterTable()">
+      <option value="">All agents</option>
+      {% for agent in agents %}
+      <option value="{{ agent }}">{{ agent }}</option>
+      {% endfor %}
+    </select>
+    <select id="statusFilter" onchange="filterTable()">
+      <option value="">All statuses</option>
+      <option value="pass">Passed</option>
+      <option value="fail">Failed</option>
+    </select>
+  </div>
+
+  <div class="card">
+    <table id="runsTable">
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>Version</th>
+          <th>Query</th>
+          <th>Score</th>
+          <th>Status</th>
+          <th>Latency</th>
+          <th>Tokens</th>
+          <th>Cost</th>
+          <th>Time</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in traces %}
+        <tr data-agent="{{ t.agent_name }}" data-status="{{ 'pass' if t.eval_passed else 'fail' }}">
+          <td><span class="agent-tag">{{ t.agent_name }}</span></td>
+          <td style="color:#64748b">{{ t.agent_version }}</td>
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#94a3b8">
+            {{ t.input_preview or "—" }}
+          </td>
+          <td>
+            {% if t.overall_score is not none %}
+            <span class="score {% if t.overall_score >= 0.8 %}high{% elif t.overall_score >= 0.6 %}mid{% else %}low{% endif %}">
+              {{ t.overall_score }}
+            </span>
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if t.eval_passed is not none %}
+            <span class="badge {{ 'pass' if t.eval_passed else 'fail' }}">
+              {{ '✓ PASS' if t.eval_passed else '✗ FAIL' }}
+            </span>
+            {% else %}<span class="badge none">—</span>{% endif %}
+          </td>
+          <td style="color:#94a3b8">{{ t.total_latency_ms }}ms</td>
+          <td style="color:#94a3b8">{{ t.total_tokens }}</td>
+          <td style="color:#94a3b8">${{ "%.6f"|format(t.cost_usd) }}</td>
+          <td style="color:#64748b;font-size:11px">{{ t.timestamp[:16] }}</td>
+          <td><a class="link" href="/trace/{{ t.run_id }}">View →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+function filterTable() {
+  const search = document.getElementById('search').value.toLowerCase();
+  const agent = document.getElementById('agentFilter').value;
+  const status = document.getElementById('statusFilter').value;
+  const rows = document.querySelectorAll('#runsTable tbody tr');
+  rows.forEach(row => {
+    const text = row.textContent.toLowerCase();
+    const rowAgent = row.dataset.agent;
+    const rowStatus = row.dataset.status;
+    const matchSearch = !search || text.includes(search);
+    const matchAgent = !agent || rowAgent === agent;
+    const matchStatus = !status || rowStatus === status;
+    row.style.display = matchSearch && matchAgent && matchStatus ? '' : 'none';
+  });
+}
+</script>
+</body>
+</html>
