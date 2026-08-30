@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+anthropic
+openai
+sqlalchemy
+python-dotenv
+httpx
+pytest
+rich
+groq
