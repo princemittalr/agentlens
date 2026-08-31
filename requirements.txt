@@ -4,6 +4,7 @@ anthropic==1.2.0
 anyio==4.14.2
 certifi==2026.7.22
 click==8.5.0
+coverage==7.16.0
 cuda-bindings==13.3.1
 cuda-pathfinder==1.8.0
 cuda-toolkit==13.0.3.0
@@ -57,6 +58,7 @@ pydantic==2.13.5
 pydantic_core==2.46.5
 Pygments==2.21.0
 pytest==9.1.1
+pytest-cov==7.1.0
 python-dotenv==1.2.3
 python-multipart==0.0.32
 PyYAML==6.0.3
