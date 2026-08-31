@@ -8,12 +8,12 @@ load_dotenv(dotenv_path="/home/prince-mittal/agentlens/.env")
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-import sqlite3
 from jinja2 import Environment, FileSystemLoader
+import sqlite3
 
 from tracer.database import get_all_traces, get_trace_by_id
 from tracer.regression import compare_versions, fetch_evals_for_version
+from evaluator.clustering import run_failure_clustering, load_clusters
 
 app = FastAPI(title="AgentLens Dashboard")
 
@@ -21,8 +21,10 @@ BASE_DIR = os.path.dirname(__file__)
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 DB_PATH = os.path.join(BASE_DIR, "..", "agentlens.db")
 
-# Use Jinja2 directly instead of Starlette's wrapper
 jinja_env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+
+# Add custom filter for JSON parsing in templates
+jinja_env.filters['from_json'] = json.loads
 
 
 def render(template_name: str, context: dict) -> HTMLResponse:
@@ -53,6 +55,16 @@ def get_agent_versions():
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def get_distinct_agents():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT DISTINCT agent_name FROM evaluations ORDER BY agent_name"
+    ).fetchall()
+    conn.close()
+    return [r["agent_name"] for r in rows]
 
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
@@ -125,6 +137,53 @@ async def trace_detail(request: Request, run_id: str):
         "trace": trace,
         "eval_data": eval_data,
     })
+
+
+@app.get("/clusters", response_class=HTMLResponse)
+async def clusters_view(request: Request, agent: str = None):
+    agents = get_distinct_agents()
+    clusters = load_clusters(agent_name=agent or "all")
+
+    total_clustered = sum(
+        len(json.loads(c["run_ids"])) for c in clusters
+    )
+    noise_count = 0  # updated after clustering run
+
+    return render("clusters.html", {
+        "clusters": clusters,
+        "agents": agents,
+        "selected_agent": agent or "all",
+        "total_clustered": total_clustered,
+        "noise_count": noise_count,
+    })
+
+
+@app.post("/api/clusters/run")
+async def api_run_clustering(agent: str = "all"):
+    try:
+        target = None if agent == "all" else agent
+        result = run_failure_clustering(
+            agent_name=target,
+            threshold=0.9,
+            min_cluster_size=2,
+            verbose=False
+        )
+        return {
+            "num_clusters": result.num_clusters,
+            "total_failures": result.total_failures,
+            "noise_count": result.noise_count,
+            "clusters": [
+                {
+                    "cluster_id": c.cluster_id,
+                    "label": c.label,
+                    "size": c.size,
+                    "avg_score": c.avg_score,
+                }
+                for c in result.clusters
+            ]
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.get("/regression", response_class=HTMLResponse)
