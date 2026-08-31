@@ -234,3 +234,83 @@ async def api_regression(agent: str, baseline: str, candidate: str):
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+@app.get("/charts", response_class=HTMLResponse)
+async def charts_view(request: Request):
+    traces = get_all_traces()
+    evals = get_all_evals()
+
+    eval_map = {e["run_id"]: e for e in evals}
+    total_runs = len(traces)
+    evaluated = len(evals)
+    passed = sum(1 for e in evals if e["passed"])
+    pass_rate = round((passed / evaluated * 100), 1) if evaluated else 0
+    avg_score = round(
+        sum(e["overall_score"] for e in evals) / evaluated, 3
+    ) if evaluated else 0
+    total_cost = round(sum(t["cost_usd"] for t in traces), 6)
+
+    # Per-agent stats
+    from collections import defaultdict
+    agent_data = defaultdict(lambda: {
+        "scores": [], "latencies": [],
+        "prompt_tokens": [], "completion_tokens": [],
+        "passed": 0, "total": 0
+    })
+
+    for t in traces:
+        a = t["agent_name"]
+        agent_data[a]["latencies"].append(t["total_latency_ms"])
+        agent_data[a]["prompt_tokens"].append(t["prompt_tokens"])
+        agent_data[a]["completion_tokens"].append(t["completion_tokens"])
+        ev = eval_map.get(t["run_id"])
+        if ev:
+            agent_data[a]["scores"].append(ev["overall_score"])
+            agent_data[a]["total"] += 1
+            if ev["passed"]:
+                agent_data[a]["passed"] += 1
+
+    agent_stats = []
+    for agent_name, d in sorted(agent_data.items()):
+        scores = d["scores"]
+        lats = d["latencies"]
+        pt = d["prompt_tokens"]
+        ct = d["completion_tokens"]
+        agent_stats.append({
+            "agent_name": agent_name,
+            "avg_score": round(sum(scores) / len(scores), 3) if scores else 0,
+            "pass_rate": round(d["passed"] / d["total"] * 100, 1) if d["total"] else 0,
+            "avg_latency": round(sum(lats) / len(lats), 1) if lats else 0,
+            "avg_prompt_tokens": round(sum(pt) / len(pt), 1) if pt else 0,
+            "avg_completion_tokens": round(sum(ct) / len(ct), 1) if ct else 0,
+        })
+
+    # Score distribution
+    all_scores = [e["overall_score"] for e in evals]
+    score_distribution = {
+        "excellent": sum(1 for s in all_scores if s >= 0.9),
+        "good": sum(1 for s in all_scores if 0.7 <= s < 0.9),
+        "poor": sum(1 for s in all_scores if s < 0.7),
+    }
+
+    # Token stats (same as agent_stats but for chart)
+    token_stats = [
+        {"agent": a["agent_name"],
+         "prompt": a["avg_prompt_tokens"],
+         "completion": a["avg_completion_tokens"]}
+        for a in agent_stats
+    ]
+
+    return render("charts.html", {
+        "total_runs": total_runs,
+        "evaluated": evaluated,
+        "passed": passed,
+        "pass_rate": pass_rate,
+        "avg_score": avg_score,
+        "total_cost": total_cost,
+        "agent_count": len(agent_stats),
+        "agent_stats": agent_stats,
+        "score_distribution": score_distribution,
+        "token_stats": token_stats,
+    })

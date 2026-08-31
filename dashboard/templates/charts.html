@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Charts — AgentLens</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; }
+  .topbar { background: #1a1d2e; border-bottom: 1px solid #2d3748; padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
+  .topbar h1 { font-size: 20px; font-weight: 700; color: #7c3aed; }
+  .nav { display: flex; gap: 4px; margin-left: auto; }
+  .nav a { padding: 6px 14px; border-radius: 6px; text-decoration: none; color: #94a3b8; font-size: 13px; font-weight: 500; }
+  .nav a:hover, .nav a.active { background: #7c3aed22; color: #a78bfa; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 32px; }
+  .section-title { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: #64748b; margin-bottom: 16px; }
+  .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 32px; }
+  .chart-card { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 12px; padding: 24px; }
+  .chart-card h3 { font-size: 13px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.8px; }
+  .chart-card p { font-size: 12px; color: #64748b; margin-bottom: 20px; }
+  .chart-wrap { position: relative; height: 220px; }
+  .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }
+  .stat-card { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 12px; padding: 20px; }
+  .stat-card .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #64748b; margin-bottom: 8px; }
+  .stat-card .val { font-size: 28px; font-weight: 700; }
+  .stat-card .sub { font-size: 11px; color: #64748b; margin-top: 4px; }
+  .full-width { grid-column: 1 / -1; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #94a3b8; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>⬡ AgentLens</h1>
+  <nav class="nav">
+    <a href="/">Runs</a>
+    <a href="/charts" class="active">Charts</a>
+    <a href="/clusters">Clusters</a>
+    <a href="/regression">Regression</a>
+  </nav>
+</div>
+
+<div class="container">
+
+  <!-- Summary Stats -->
+  <div class="section-title">Platform Overview</div>
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="lbl">Total Runs</div>
+      <div class="val" style="color:#a78bfa">{{ total_runs }}</div>
+      <div class="sub">across {{ agent_count }} agents</div>
+    </div>
+    <div class="stat-card">
+      <div class="lbl">Overall Pass Rate</div>
+      <div class="val" style="color:#34d399">{{ pass_rate }}%</div>
+      <div class="sub">{{ passed }} / {{ evaluated }} evaluated</div>
+    </div>
+    <div class="stat-card">
+      <div class="lbl">Avg Score</div>
+      <div class="val" style="color:{% if avg_score >= 0.8 %}#34d399{% elif avg_score >= 0.6 %}#fbbf24{% else %}#f87171{% endif %}">{{ avg_score }}</div>
+      <div class="sub">platform-wide</div>
+    </div>
+    <div class="stat-card">
+      <div class="lbl">Total Cost</div>
+      <div class="val" style="color:#e2e8f0; font-size:20px">${{ total_cost }}</div>
+      <div class="sub">all runs combined</div>
+    </div>
+  </div>
+
+  <!-- Charts Grid -->
+  <div class="section-title">Metric Trends</div>
+  <div class="charts-grid">
+
+    <!-- Score trend per agent -->
+    <div class="chart-card">
+      <h3>Score Trend by Agent</h3>
+      <p>Average eval score per agent over all runs</p>
+      <div class="chart-wrap">
+        <canvas id="scoreTrendChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Pass rate per agent -->
+    <div class="chart-card">
+      <h3>Pass Rate by Agent</h3>
+      <p>Percentage of runs scoring ≥ 0.7 per agent</p>
+      <div class="chart-wrap">
+        <canvas id="passRateChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Latency distribution -->
+    <div class="chart-card">
+      <h3>Latency by Agent</h3>
+      <p>Average response latency in milliseconds</p>
+      <div class="chart-wrap">
+        <canvas id="latencyChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Score distribution -->
+    <div class="chart-card">
+      <h3>Score Distribution</h3>
+      <p>How scores are distributed across all runs</p>
+      <div class="chart-wrap">
+        <canvas id="scoreDistChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Token usage per agent -->
+    <div class="chart-card full-width">
+      <h3>Token Usage per Agent</h3>
+      <p>Average prompt vs completion tokens per run</p>
+      <div class="chart-wrap" style="height:200px">
+        <canvas id="tokenChart"></canvas>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const COLORS = {
+  purple: '#7c3aed',
+  green: '#34d399',
+  yellow: '#fbbf24',
+  red: '#f87171',
+  blue: '#60a5fa',
+  orange: '#fb923c',
+  pink: '#f472b6',
+  teal: '#2dd4bf',
+};
+
+const AGENT_COLORS = [
+  '#7c3aed', '#34d399', '#fbbf24', '#f87171', '#60a5fa'
+];
+
+Chart.defaults.color = '#64748b';
+Chart.defaults.borderColor = '#1e2235';
+Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+Chart.defaults.font.size = 11;
+
+// ── Data from backend ──────────────────────────────────────────────
+const agentStats   = {{ agent_stats | tojson }};
+const scoreDist    = {{ score_distribution | tojson }};
+const tokenStats   = {{ token_stats | tojson }};
+
+const agentNames   = agentStats.map(a => a.agent_name);
+const avgScores    = agentStats.map(a => a.avg_score);
+const passRates    = agentStats.map(a => a.pass_rate);
+const avgLatencies = agentStats.map(a => a.avg_latency);
+const promptToks   = agentStats.map(a => a.avg_prompt_tokens);
+const completeToks = agentStats.map(a => a.avg_completion_tokens);
+
+// ── Score Trend (bar per agent) ────────────────────────────────────
+new Chart(document.getElementById('scoreTrendChart'), {
+  type: 'bar',
+  data: {
+    labels: agentNames,
+    datasets: [{
+      label: 'Avg Score',
+      data: avgScores,
+      backgroundColor: agentNames.map((_, i) => AGENT_COLORS[i % AGENT_COLORS.length] + 'cc'),
+      borderColor: agentNames.map((_, i) => AGENT_COLORS[i % AGENT_COLORS.length]),
+      borderWidth: 1,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      y: {
+        min: 0, max: 1,
+        grid: { color: '#1e2235' },
+        ticks: { callback: v => v.toFixed(1) }
+      },
+      x: { grid: { display: false } }
+    }
+  }
+});
+
+// ── Pass Rate (horizontal bar) ─────────────────────────────────────
+new Chart(document.getElementById('passRateChart'), {
+  type: 'bar',
+  data: {
+    labels: agentNames,
+    datasets: [{
+      label: 'Pass Rate %',
+      data: passRates,
+      backgroundColor: passRates.map(r =>
+        r >= 80 ? '#34d39966' : r >= 60 ? '#fbbf2466' : '#f8717166'
+      ),
+      borderColor: passRates.map(r =>
+        r >= 80 ? '#34d399' : r >= 60 ? '#fbbf24' : '#f87171'
+      ),
+      borderWidth: 1,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      y: {
+        min: 0, max: 100,
+        grid: { color: '#1e2235' },
+        ticks: { callback: v => v + '%' }
+      },
+      x: { grid: { display: false } }
+    }
+  }
+});
+
+// ── Latency ────────────────────────────────────────────────────────
+new Chart(document.getElementById('latencyChart'), {
+  type: 'bar',
+  data: {
+    labels: agentNames,
+    datasets: [{
+      label: 'Avg Latency (ms)',
+      data: avgLatencies,
+      backgroundColor: '#60a5fa44',
+      borderColor: '#60a5fa',
+      borderWidth: 1,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      y: {
+        grid: { color: '#1e2235' },
+        ticks: { callback: v => v + 'ms' }
+      },
+      x: { grid: { display: false } }
+    }
+  }
+});
+
+// ── Score Distribution ─────────────────────────────────────────────
+new Chart(document.getElementById('scoreDistChart'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Excellent (≥0.9)', 'Good (0.7–0.9)', 'Poor (<0.7)'],
+    datasets: [{
+      data: [scoreDist.excellent, scoreDist.good, scoreDist.poor],
+      backgroundColor: ['#34d39966', '#fbbf2466', '#f8717166'],
+      borderColor: ['#34d399', '#fbbf24', '#f87171'],
+      borderWidth: 2,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { padding: 16, usePointStyle: true }
+      }
+    },
+    cutout: '65%',
+  }
+});
+
+// ── Token Usage ────────────────────────────────────────────────────
+new Chart(document.getElementById('tokenChart'), {
+  type: 'bar',
+  data: {
+    labels: agentNames,
+    datasets: [
+      {
+        label: 'Prompt Tokens',
+        data: promptToks,
+        backgroundColor: '#7c3aed66',
+        borderColor: '#7c3aed',
+        borderWidth: 1,
+        borderRadius: 4,
+      },
+      {
+        label: 'Completion Tokens',
+        data: completeToks,
+        backgroundColor: '#34d39966',
+        borderColor: '#34d399',
+        borderWidth: 1,
+        borderRadius: 4,
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'top',
+        labels: { usePointStyle: true, padding: 16 }
+      }
+    },
+    scales: {
+      y: {
+        grid: { color: '#1e2235' },
+        ticks: { callback: v => v + ' tok' }
+      },
+      x: { grid: { display: false } },
+    }
+  }
+});
+</script>
+</body>
+</html>
