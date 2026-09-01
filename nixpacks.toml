@@ -3,7 +3,7 @@ nixPkgs = ["python311", "python311Packages.pip"]
 
 [phases.install]
 cmds = [
-  "pip3 install fastapi uvicorn jinja2 python-dotenv groq httpx"
+  "pip3 install fastapi uvicorn jinja2 python-dotenv groq httpx --break-system-packages"
 ]
 
 [start]
