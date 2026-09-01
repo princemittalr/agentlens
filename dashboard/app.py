@@ -314,3 +314,9 @@ async def charts_view(request: Request):
         "score_distribution": score_distribution,
         "token_stats": token_stats,
     })
+
+
+# Health check endpoint for Railway
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "agentlens"}
