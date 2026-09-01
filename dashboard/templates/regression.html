@@ -9,7 +9,7 @@
   .topbar { background: #1a1d2e; border-bottom: 1px solid #2d3748; padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
   .topbar h1 { font-size: 20px; font-weight: 700; color: #7c3aed; }
   .nav { display: flex; gap: 4px; margin-left: auto; }
-  .nav a { padding: 6px 14px; border-radius: 6px; text-decoration: none; color: #94a3b8; font-size: 13px; }
+  .nav a { padding: 6px 14px; border-radius: 6px; text-decoration: none; color: #94a3b8; font-size: 13px; font-weight: 500; }
   .nav a:hover, .nav a.active { background: #7c3aed22; color: #a78bfa; }
   .container { max-width: 1000px; margin: 0 auto; padding: 32px; }
   .card { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 12px; padding: 24px; margin-bottom: 24px; }
@@ -38,8 +38,8 @@
   .alert-box.critical { background: #450a0a22; border: 1px solid #f8717133; }
   .alert-box.warning { background: #451a0322; border: 1px solid #fbbf2433; }
   .alert-box.improvement { background: #06342022; border: 1px solid #34d39933; }
-  .alert-box .msg { font-size: 13px; }
   .error-box { background: #450a0a22; border: 1px solid #f8717133; border-radius: 8px; padding: 16px; color: #f87171; font-size: 13px; }
+  .hint { font-size: 12px; color: #64748b; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -54,20 +54,20 @@
 </div>
 <div class="container">
 
-  <!-- Selector -->
   <div class="card">
     <h2>Compare Versions</h2>
-    <form method="get" action="/regression">
+    <form method="get" action="/regression" id="regForm">
       <div class="form-row">
         <div class="form-group">
           <label>Agent</label>
-          <select name="agent">
+          <select name="agent" id="agentSelect" onchange="filterVersions()">
             <option value="">Select agent</option>
-            {% set agents = [] %}
+            {% set seen = [] %}
             {% for v in versions %}
-              {% if v.agent_name not in agents %}
-                {% set _ = agents.append(v.agent_name) %}
-                <option value="{{ v.agent_name }}" {% if v.agent_name == selected_agent %}selected{% endif %}>
+              {% if v.agent_name not in seen %}
+                {% set _ = seen.append(v.agent_name) %}
+                <option value="{{ v.agent_name }}"
+                  {% if v.agent_name == selected_agent %}selected{% endif %}>
                   {{ v.agent_name }}
                 </option>
               {% endif %}
@@ -76,22 +76,26 @@
         </div>
         <div class="form-group">
           <label>Baseline Version</label>
-          <select name="baseline">
+          <select name="baseline" id="baselineSelect">
             <option value="">Select baseline</option>
             {% for v in versions %}
-            <option value="{{ v.agent_version }}" {% if v.agent_version == selected_baseline %}selected{% endif %}>
-              {{ v.agent_name }} — {{ v.agent_version }}
+            <option value="{{ v.agent_version }}"
+              data-agent="{{ v.agent_name }}"
+              {% if v.agent_version == selected_baseline and v.agent_name == selected_agent %}selected{% endif %}>
+              {{ v.agent_version }}
             </option>
             {% endfor %}
           </select>
         </div>
         <div class="form-group">
           <label>Candidate Version</label>
-          <select name="candidate">
+          <select name="candidate" id="candidateSelect">
             <option value="">Select candidate</option>
             {% for v in versions %}
-            <option value="{{ v.agent_version }}" {% if v.agent_version == selected_candidate %}selected{% endif %}>
-              {{ v.agent_name }} — {{ v.agent_version }}
+            <option value="{{ v.agent_version }}"
+              data-agent="{{ v.agent_name }}"
+              {% if v.agent_version == selected_candidate and v.agent_name == selected_agent %}selected{% endif %}>
+              {{ v.agent_version }}
             </option>
             {% endfor %}
           </select>
@@ -99,6 +103,7 @@
         <button type="submit" class="btn">Compare →</button>
       </div>
     </form>
+    <p class="hint">⚠ Baseline and candidate must be different versions of the <strong>same agent</strong>.</p>
   </div>
 
   {% if error %}
@@ -106,7 +111,6 @@
   {% endif %}
 
   {% if report %}
-  <!-- Verdict -->
   <div class="card">
     <h2>Report</h2>
     <div class="verdict">{{ report.verdict }}</div>
@@ -132,7 +136,6 @@
       </div>
     </div>
 
-    <!-- Metric table -->
     <table style="margin-bottom:24px">
       <thead>
         <tr>
@@ -164,30 +167,24 @@
       </tbody>
     </table>
 
-    <!-- Alerts -->
     {% if report.alerts %}
     <div style="margin-bottom:16px">
       <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#f87171;margin-bottom:10px">
         ⚠ Regressions ({{ report.alerts|length }})
       </div>
       {% for a in report.alerts %}
-      <div class="alert-box {{ a.severity }}">
-        <div class="msg">{{ a.message }}</div>
-      </div>
+      <div class="alert-box {{ a.severity }}">{{ a.message }}</div>
       {% endfor %}
     </div>
     {% endif %}
 
-    <!-- Improvements -->
     {% if report.improved %}
     <div>
       <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#34d399;margin-bottom:10px">
         ✨ Improvements ({{ report.improved|length }})
       </div>
       {% for a in report.improved %}
-      <div class="alert-box improvement">
-        <div class="msg">{{ a.message }}</div>
-      </div>
+      <div class="alert-box improvement">{{ a.message }}</div>
       {% endfor %}
     </div>
     {% endif %}
@@ -195,5 +192,34 @@
   {% endif %}
 
 </div>
+
+<script>
+// Build version map from all options
+const versionData = {};
+document.querySelectorAll('#baselineSelect option[data-agent]').forEach(opt => {
+  const agent = opt.dataset.agent;
+  if (!versionData[agent]) versionData[agent] = [];
+  versionData[agent].push(opt.value);
+});
+
+function filterVersions() {
+  const agent = document.getElementById('agentSelect').value;
+  const baselineSelect = document.getElementById('baselineSelect');
+  const candidateSelect = document.getElementById('candidateSelect');
+
+  // Filter both dropdowns to only show versions for selected agent
+  [baselineSelect, candidateSelect].forEach(sel => {
+    const opts = sel.querySelectorAll('option[data-agent]');
+    opts.forEach(opt => {
+      opt.style.display = (!agent || opt.dataset.agent === agent) ? '' : 'none';
+    });
+    // Reset selection
+    sel.value = '';
+  });
+}
+
+// Run on load to filter if agent pre-selected
+filterVersions();
+</script>
 </body>
 </html>
