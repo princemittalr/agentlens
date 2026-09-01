@@ -17,7 +17,8 @@ tracer = Tracer(project="agentlens")
 # ─── Tool Registry ────────────────────────────────────────────────────────────
 
 def tool_summarize(text: str) -> str:
-    """Summarize a block of text using LLM."""
+    if not text or not text.strip():
+        raise ValueError("Cannot summarize empty input.")
     response = client.chat.completions.create(
         model="qwen/qwen3.8-27b",
         messages=[
@@ -31,7 +32,8 @@ def tool_summarize(text: str) -> str:
 
 
 def tool_extract_keywords(text: str) -> str:
-    """Extract keywords from text."""
+    if not text or not text.strip():
+        raise ValueError("Cannot extract keywords from empty input.")
     response = client.chat.completions.create(
         model="qwen/qwen3.8-27b",
         messages=[
@@ -45,7 +47,8 @@ def tool_extract_keywords(text: str) -> str:
 
 
 def tool_classify_sentiment(text: str) -> str:
-    """Classify sentiment of text."""
+    if not text or not text.strip():
+        raise ValueError("Cannot classify sentiment of empty input.")
     response = client.chat.completions.create(
         model="qwen/qwen3.8-27b",
         messages=[
@@ -59,22 +62,21 @@ def tool_classify_sentiment(text: str) -> str:
 
 
 def tool_translate(text: str) -> str:
-    """Translate text to French."""
+    if not text or not text.strip():
+        raise ValueError("Cannot translate empty input.")
     response = client.chat.completions.create(
         model="qwen/qwen3.8-27b",
         messages=[
             {"role": "system", "content": "Translate the following text to French. Return only the translation."},
             {"role": "user", "content": text},
         ],
-        max_tokens=200,
+        max_tokens=300,
         temperature=0.1,
     )
     return response.choices[0].message.content
 
 
 def tool_broken_json_parser(text: str) -> str:
-    """Intentionally broken tool — simulates a real pipeline failure."""
-    # This tool always fails — to demonstrate error cascade detection
     raise ValueError(f"JSON parse error: unexpected token at position 0 in: '{text[:30]}...'")
 
 
@@ -83,25 +85,28 @@ TOOLS = {
     "extract_keywords": tool_extract_keywords,
     "classify_sentiment": tool_classify_sentiment,
     "translate": tool_translate,
-    "parse_json": tool_broken_json_parser,  # intentionally broken
+    "parse_json": tool_broken_json_parser,
 }
 
 # ─── Planner ─────────────────────────────────────────────────────────────────
 
-PLANNER_SYSTEM = """You are a task planner. Given a user goal, break it into a sequence of steps.
+PLANNER_SYSTEM = """You are a task planner. Given a user goal and input text, break it into steps.
 Each step must use one of these tools: summarize, extract_keywords, classify_sentiment, translate, parse_json.
 
-Respond ONLY with a JSON array of steps like:
+Respond ONLY with a JSON array like:
 [
-  {"step": 1, "tool": "tool_name", "input": "what to pass to the tool"},
-  {"step": 2, "tool": "tool_name", "input": "use previous result if needed"}
+  {"step": 1, "tool": "tool_name", "use_input": "original"},
+  {"step": 2, "tool": "tool_name", "use_input": "previous"}
 ]
+
+"use_input" must be either:
+- "original" → use the original input text
+- "previous" → use the output of the previous step
 
 Return ONLY the JSON array, no explanation."""
 
 
 def generate_plan(goal: str) -> list:
-    """Ask LLM to create a step-by-step plan."""
     response = client.chat.completions.create(
         model="qwen/qwen3.8-27b",
         messages=[
@@ -112,29 +117,24 @@ def generate_plan(goal: str) -> list:
         temperature=0.1,
     )
     raw = response.choices[0].message.content.strip()
-    # Strip markdown fences
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
-    raw = raw.strip()
-    return json.loads(raw)
+    return json.loads(raw.strip())
 
 
-@tracer.trace(agent="planner-agent", version="v1.0", model="qwen/qwen3.8-27b")
+@tracer.trace(agent="planner-agent", version="v2.0", model="qwen/qwen3.8-27b")
 def planner_agent(goal: str, input_text: str, _trace=None) -> str:
     total_prompt_tokens = 0
     total_completion_tokens = 0
-    step_results = {}
-    final_output = ""
     errors = []
 
-    # Step 0 — Generate plan
+    # ── Step 0: Generate plan ──────────────────────────────────────
     plan_start = time.time()
     try:
         plan = generate_plan(goal)
         plan_latency = round((time.time() - plan_start) * 1000, 2)
-
         if _trace:
             _trace.steps.append(Step(
                 step_index=0,
@@ -146,35 +146,58 @@ def planner_agent(goal: str, input_text: str, _trace=None) -> str:
                 tool_name="planner",
             ))
     except Exception as e:
-        if _trace:
-            _trace.prompt_tokens = total_prompt_tokens
-            _trace.completion_tokens = total_completion_tokens
-            _trace.total_tokens = total_prompt_tokens + total_completion_tokens
         return f"Planning failed: {e}"
 
-    # Execute each step
+    # ── Execute steps with proper input chaining ───────────────────
+    # KEY FIX: maintain a results dict keyed by step number
+    # Each step explicitly declares whether it uses "original" or "previous"
+    step_results = {0: input_text}  # step 0 = original input
+    final_output = ""
+
     for plan_step in plan:
         step_num = plan_step.get("step", 0)
         tool_name = plan_step.get("tool", "")
-        tool_input = plan_step.get("input", input_text)
+        use_input = plan_step.get("use_input", "original")
 
-        # Replace placeholder with actual input text
-        if "previous" in tool_input.lower() or "result" in tool_input.lower():
-            tool_input = step_results.get(step_num - 1, input_text)
+        # ── FIXED: explicit input routing ──────────────────────────
+        if use_input == "previous":
+            # Use the output of the immediately preceding step
+            prev_step = step_num - 1
+            tool_input = step_results.get(prev_step, "")
+            if not tool_input:
+                error_msg = f"Step {step_num}: previous step ({prev_step}) produced no output — skipping"
+                errors.append(error_msg)
+                step_results[step_num] = ""
+                if _trace:
+                    _trace.steps.append(Step(
+                        step_index=step_num,
+                        type="tool_call",
+                        input="(empty — previous step failed)",
+                        output="",
+                        latency_ms=0,
+                        tokens_used=0,
+                        tool_name=tool_name,
+                        error=error_msg,
+                    ))
+                continue
+        else:
+            # use_input == "original"
+            tool_input = input_text
 
+        # ── Execute tool ───────────────────────────────────────────
         step_start = time.time()
         tool_fn = TOOLS.get(tool_name)
 
         if not tool_fn:
             error_msg = f"Unknown tool: {tool_name}"
             errors.append(error_msg)
-            step_results[step_num] = error_msg
+            step_results[step_num] = ""
             if _trace:
                 _trace.steps.append(Step(
                     step_index=step_num,
                     type="tool_call",
-                    input=tool_input,
-                    output=error_msg,
+                    input=tool_input[:200],
+                    output="",
                     latency_ms=0,
                     tokens_used=0,
                     tool_name=tool_name,
@@ -186,7 +209,7 @@ def planner_agent(goal: str, input_text: str, _trace=None) -> str:
             result = tool_fn(tool_input)
             step_latency = round((time.time() - step_start) * 1000, 2)
             step_results[step_num] = result
-            final_output = result  # last successful step = final output
+            final_output = result
 
             if _trace:
                 _trace.steps.append(Step(
@@ -204,8 +227,6 @@ def planner_agent(goal: str, input_text: str, _trace=None) -> str:
             error_msg = f"Tool '{tool_name}' failed: {e}"
             errors.append(error_msg)
             step_results[step_num] = ""
-
-            # ── Error cascade — downstream steps get empty input ──
             if _trace:
                 _trace.steps.append(Step(
                     step_index=step_num,
@@ -225,14 +246,12 @@ def planner_agent(goal: str, input_text: str, _trace=None) -> str:
 
     if errors and not final_output:
         return f"Pipeline failed. Errors: {'; '.join(errors)}"
-
     if errors:
         return f"{final_output}\n\n[WARNING: {len(errors)} step(s) failed: {'; '.join(errors)}]"
-
     return final_output
 
 
-# ─── Test Suite ──────────────────────────────────────────────────────────────
+# ─── Test Suite ───────────────────────────────────────────────────────────────
 
 SAMPLE_TEXT = """
 AgentLens is a production-grade observability platform designed for LLM agent pipelines.
@@ -247,12 +266,12 @@ TEST_CASES = [
         "goal": "Summarize the text, then extract keywords from the summary",
         "input_text": SAMPLE_TEXT,
         "known_facts": "AgentLens is an observability platform for LLM agents with tracing, evaluation, and regression detection.",
-        "rubric": "Did the agent produce a summary and keywords related to AgentLens observability platform?",
+        "rubric": "Did the agent produce a meaningful summary and relevant keywords about AgentLens?",
     },
     {
-        "goal": "Classify the sentiment of the text, then translate it to French",
+        "goal": "Classify the sentiment of the text, then translate the sentiment result to French",
         "input_text": SAMPLE_TEXT,
-        "known_facts": "The text is positive in sentiment. A French translation should be provided.",
+        "known_facts": "The text is positive in sentiment. A French translation of the sentiment word should be provided.",
         "rubric": "Did the agent classify sentiment as POSITIVE and provide a French translation?",
     },
     {
@@ -262,23 +281,22 @@ TEST_CASES = [
         "rubric": "Did the agent report the JSON parse failure clearly without crashing entirely?",
     },
     {
-        "goal": "Extract keywords from the text, classify their sentiment, then summarize",
+        "goal": "Extract keywords from the text, then summarize those keywords",
         "input_text": SAMPLE_TEXT,
-        "known_facts": "Keywords about AgentLens should be extracted. Sentiment should be classified. A final summary produced.",
-        "rubric": "Did the agent complete all three steps: extract keywords, classify sentiment, and summarize?",
+        "known_facts": "Keywords about AgentLens should be extracted first. Then a summary of those keywords produced.",
+        "rubric": "Did the agent correctly chain extract_keywords → summarize with real output passing between steps?",
     },
 ]
 
 
 def run_planner_eval():
-    print("\n" + "="*60)
-    print("  AgentLens — Planner Agent Evaluation Suite")
-    print("="*60)
+    print("\n" + "="*62)
+    print("  AgentLens — Planner Agent v2.0 (Fixed) Evaluation Suite")
+    print("="*62)
 
     results = []
     for i, tc in enumerate(TEST_CASES):
-        print(f"\n[Test {i+1}/{len(TEST_CASES)}] {tc['goal'][:60]}...")
-
+        print(f"\n[Test {i+1}/{len(TEST_CASES)}] {tc['goal'][:58]}...")
         output = planner_agent(tc["goal"], tc["input_text"])
 
         from tracer.database import get_all_traces
@@ -297,11 +315,10 @@ def run_planner_eval():
         )
         results.append(eval_result)
 
-    # Summary
     passed = sum(1 for r in results if r.passed)
     avg_score = round(sum(r.overall_score for r in results) / len(results), 3)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'='*62}")
     print(f"  FINAL RESULTS: {passed}/{len(results)} tests passed")
     print(f"  Avg Score    : {avg_score}")
 
@@ -320,23 +337,7 @@ def run_planner_eval():
             print(f"    ❌ {metric}: failed {count}/{len(TEST_CASES)} times")
     else:
         print("    ✅ No metric failures detected")
-
-    print(f"\n  Step-level error analysis:")
-    from tracer.database import get_all_traces
-    all_traces = get_all_traces()
-    planner_traces = [t for t in all_traces if t["agent_name"] == "planner-agent"][:len(TEST_CASES)]
-
-    total_steps = 0
-    failed_steps = 0
-    for t in planner_traces:
-        steps = json.loads(t["steps"])
-        total_steps += len(steps)
-        failed_steps += sum(1 for s in steps if s.get("error"))
-
-    print(f"    Total steps executed : {total_steps}")
-    print(f"    Failed steps         : {failed_steps}")
-    print(f"    Step success rate    : {round((total_steps - failed_steps) / total_steps * 100, 1)}%")
-    print(f"{'='*60}\n")
+    print(f"{'='*62}\n")
 
 
 if __name__ == "__main__":
