@@ -1,10 +1,10 @@
 import sys
 import os
 import json
-sys.path.insert(0, "/home/prince-mittal/agentlens")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dotenv import load_dotenv
-load_dotenv(dotenv_path="/home/prince-mittal/agentlens/.env")
+load_dotenv()
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -13,7 +13,13 @@ import sqlite3
 
 from tracer.database import get_all_traces, get_trace_by_id
 from tracer.regression import compare_versions, fetch_evals_for_version
-from evaluator.clustering import run_failure_clustering, load_clusters
+
+# Optional imports — not available on lightweight deploy
+try:
+    from evaluator.clustering import run_failure_clustering, load_clusters
+    CLUSTERING_AVAILABLE = True
+except ImportError:
+    CLUSTERING_AVAILABLE = False
 
 app = FastAPI(title="AgentLens Dashboard")
 
@@ -22,9 +28,8 @@ TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 DB_PATH = os.path.join(BASE_DIR, "..", "agentlens.db")
 
 jinja_env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
-
-# Add custom filter for JSON parsing in templates
 jinja_env.filters['from_json'] = json.loads
+jinja_env.filters['tojson'] = json.dumps
 
 
 def render(template_name: str, context: dict) -> HTMLResponse:
@@ -37,8 +42,11 @@ def get_all_evals():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM evaluations ORDER BY timestamp DESC")
-    rows = cursor.fetchall()
+    try:
+        cursor.execute("SELECT * FROM evaluations ORDER BY timestamp DESC")
+        rows = cursor.fetchall()
+    except Exception:
+        rows = []
     conn.close()
     return [dict(row) for row in rows]
 
@@ -47,12 +55,15 @@ def get_agent_versions():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT DISTINCT agent_name, agent_version
-        FROM evaluations
-        ORDER BY agent_name, agent_version
-    """)
-    rows = cursor.fetchall()
+    try:
+        cursor.execute("""
+            SELECT DISTINCT agent_name, agent_version
+            FROM evaluations
+            ORDER BY agent_name, agent_version
+        """)
+        rows = cursor.fetchall()
+    except Exception:
+        rows = []
     conn.close()
     return [dict(row) for row in rows]
 
@@ -60,14 +71,22 @@ def get_agent_versions():
 def get_distinct_agents():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT DISTINCT agent_name FROM evaluations ORDER BY agent_name"
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT agent_name FROM evaluations ORDER BY agent_name"
+        ).fetchall()
+    except Exception:
+        rows = []
     conn.close()
     return [r["agent_name"] for r in rows]
 
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "agentlens"}
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -123,8 +142,11 @@ async def trace_detail(request: Request, run_id: str):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM evaluations WHERE run_id = ?", (run_id,))
-    row = cursor.fetchone()
+    try:
+        cursor.execute("SELECT * FROM evaluations WHERE run_id = ?", (run_id,))
+        row = cursor.fetchone()
+    except Exception:
+        row = None
     conn.close()
 
     eval_data = None
@@ -142,12 +164,18 @@ async def trace_detail(request: Request, run_id: str):
 @app.get("/clusters", response_class=HTMLResponse)
 async def clusters_view(request: Request, agent: str = None):
     agents = get_distinct_agents()
-    clusters = load_clusters(agent_name=agent or "all")
+    clusters = []
+    total_clustered = 0
+    noise_count = 0
 
-    total_clustered = sum(
-        len(json.loads(c["run_ids"])) for c in clusters
-    )
-    noise_count = 0  # updated after clustering run
+    if CLUSTERING_AVAILABLE:
+        try:
+            clusters = load_clusters(agent_name=agent or "all")
+            total_clustered = sum(
+                len(json.loads(c["run_ids"])) for c in clusters
+            )
+        except Exception:
+            pass
 
     return render("clusters.html", {
         "clusters": clusters,
@@ -155,11 +183,14 @@ async def clusters_view(request: Request, agent: str = None):
         "selected_agent": agent or "all",
         "total_clustered": total_clustered,
         "noise_count": noise_count,
+        "clustering_available": CLUSTERING_AVAILABLE,
     })
 
 
 @app.post("/api/clusters/run")
 async def api_run_clustering(agent: str = "all"):
+    if not CLUSTERING_AVAILABLE:
+        return {"error": "Clustering not available in this deployment (requires sentence-transformers)"}
     try:
         target = None if agent == "all" else agent
         result = run_failure_clustering(
@@ -172,15 +203,6 @@ async def api_run_clustering(agent: str = "all"):
             "num_clusters": result.num_clusters,
             "total_failures": result.total_failures,
             "noise_count": result.noise_count,
-            "clusters": [
-                {
-                    "cluster_id": c.cluster_id,
-                    "label": c.label,
-                    "size": c.size,
-                    "avg_score": c.avg_score,
-                }
-                for c in result.clusters
-            ]
         }
     except Exception as e:
         return {"error": str(e)}
@@ -213,29 +235,6 @@ async def regression_view(
     })
 
 
-@app.get("/api/traces")
-async def api_traces():
-    return get_all_traces()
-
-
-@app.get("/api/evals")
-async def api_evals():
-    return get_all_evals()
-
-
-@app.get("/api/regression")
-async def api_regression(agent: str, baseline: str, candidate: str):
-    try:
-        report = compare_versions(agent, baseline, candidate, verbose=False)
-        return {
-            "verdict": report.verdict,
-            "alerts": [a.__dict__ for a in report.alerts],
-            "improved": [a.__dict__ for a in report.improved],
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
-
 @app.get("/charts", response_class=HTMLResponse)
 async def charts_view(request: Request):
     traces = get_all_traces()
@@ -251,7 +250,6 @@ async def charts_view(request: Request):
     ) if evaluated else 0
     total_cost = round(sum(t["cost_usd"] for t in traces), 6)
 
-    # Per-agent stats
     from collections import defaultdict
     agent_data = defaultdict(lambda: {
         "scores": [], "latencies": [],
@@ -286,7 +284,6 @@ async def charts_view(request: Request):
             "avg_completion_tokens": round(sum(ct) / len(ct), 1) if ct else 0,
         })
 
-    # Score distribution
     all_scores = [e["overall_score"] for e in evals]
     score_distribution = {
         "excellent": sum(1 for s in all_scores if s >= 0.9),
@@ -294,7 +291,6 @@ async def charts_view(request: Request):
         "poor": sum(1 for s in all_scores if s < 0.7),
     }
 
-    # Token stats (same as agent_stats but for chart)
     token_stats = [
         {"agent": a["agent_name"],
          "prompt": a["avg_prompt_tokens"],
@@ -316,7 +312,24 @@ async def charts_view(request: Request):
     })
 
 
-# Health check endpoint for Railway
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "agentlens"}
+@app.get("/api/traces")
+async def api_traces():
+    return get_all_traces()
+
+
+@app.get("/api/evals")
+async def api_evals():
+    return get_all_evals()
+
+
+@app.get("/api/regression")
+async def api_regression(agent: str, baseline: str, candidate: str):
+    try:
+        report = compare_versions(agent, baseline, candidate, verbose=False)
+        return {
+            "verdict": report.verdict,
+            "alerts": [a.__dict__ for a in report.alerts],
+            "improved": [a.__dict__ for a in report.improved],
+        }
+    except Exception as e:
+        return {"error": str(e)}
