@@ -28,23 +28,22 @@
   .pill.agent { background: #1e1b4b; color: #a78bfa; }
   .pill.size { background: #1e2a1e; color: #34d399; }
   .pill.score { background: #2a1e1e; color: #f87171; }
-  .cluster-score-bar { height: 4px; border-radius: 2px; background: #1e2235; margin-bottom: 16px; }
-  .cluster-score-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, #f87171, #fbbf24); }
+  .score-bar { height: 4px; border-radius: 2px; background: #1e2235; margin-bottom: 16px; }
+  .score-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, #f87171, #fbbf24); }
   .samples-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #64748b; margin-bottom: 8px; }
   .sample { background: #0f1117; border-left: 3px solid #7c3aed33; border-radius: 0 6px 6px 0; padding: 10px 14px; margin-bottom: 6px; font-size: 12px; color: #94a3b8; font-style: italic; }
   .run-ids { margin-top: 12px; font-size: 11px; color: #64748b; }
   .run-id-chip { display: inline-block; background: #1e2235; padding: 2px 8px; border-radius: 4px; margin: 2px; font-family: monospace; font-size: 10px; }
-  .form-row { display: flex; gap: 12px; align-items: flex-end; margin-bottom: 24px; }
+  .form-row { display: flex; gap: 12px; align-items: flex-end; margin-bottom: 16px; }
   .form-group { display: flex; flex-direction: column; gap: 6px; }
   .form-group label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #64748b; }
   .form-group select { background: #12152a; border: 1px solid #2d3748; color: #e2e8f0; padding: 8px 12px; border-radius: 8px; font-size: 13px; }
   .btn { background: #7c3aed; color: white; border: none; padding: 9px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
   .btn:hover { background: #6d28d9; }
   .btn.secondary { background: #1e2235; color: #94a3b8; }
-  .btn.secondary:hover { background: #2d3748; }
   .empty { text-align: center; padding: 48px; color: #64748b; font-size: 14px; }
   .empty .icon { font-size: 48px; margin-bottom: 12px; }
-  .badge-noise { background: #1e2235; color: #64748b; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+  .info-box { background: #1e1b4b22; border: 1px solid #7c3aed33; border-radius: 8px; padding: 14px 16px; font-size: 13px; color: #a78bfa; margin-bottom: 16px; }
 </style>
 </head>
 <body>
@@ -60,9 +59,16 @@
 
 <div class="container">
 
-  <!-- Controls -->
   <div class="card">
     <h2>Failure Cluster Analysis</h2>
+
+    {% if not clustering_available %}
+    <div class="info-box">
+      🔬 Failure clustering uses <strong>sentence-transformers + HDBSCAN</strong> and runs locally (GPU recommended).
+      Pre-computed clusters from local analysis are shown below.
+      To re-run clustering, use: <code>python3 evaluator/clustering.py</code>
+    </div>
+    {% else %}
     <div class="form-row">
       <div class="form-group">
         <label>Agent Filter</label>
@@ -77,9 +83,9 @@
       <button class="btn secondary" onclick="window.location.reload()">↻ Refresh</button>
     </div>
     <div id="clustering-status" style="font-size:13px;color:#64748b;margin-top:8px;"></div>
+    {% endif %}
   </div>
 
-  <!-- Stats -->
   {% if clusters %}
   <div class="stats-row">
     <div class="stat">
@@ -91,10 +97,6 @@
       <div class="val" style="color:#34d399">{{ total_clustered }}</div>
     </div>
     <div class="stat">
-      <div class="lbl">Noise Points</div>
-      <div class="val" style="color:#64748b">{{ noise_count }}</div>
-    </div>
-    <div class="stat">
       <div class="lbl">Avg Cluster Score</div>
       <div class="val" style="color:#f87171">
         {{ "%.3f"|format(clusters|map(attribute='avg_score')|list|sum / clusters|length) }}
@@ -102,7 +104,6 @@
     </div>
   </div>
 
-  <!-- Cluster Cards -->
   {% for c in clusters %}
   {% set sample_outputs = c.sample_outputs | from_json %}
   {% set run_ids = c.run_ids | from_json %}
@@ -118,16 +119,13 @@
         </div>
       </div>
     </div>
-
-    <div class="cluster-score-bar">
-      <div class="cluster-score-fill" style="width:{{ (c.avg_score * 100)|int }}%"></div>
+    <div class="score-bar">
+      <div class="score-fill" style="width:{{ (c.avg_score * 100)|int }}%"></div>
     </div>
-
     <div class="samples-title">Sample Outputs</div>
     {% for sample in sample_outputs %}
     <div class="sample">"{{ sample[:120] }}{% if sample|length > 120 %}...{% endif %}"</div>
     {% endfor %}
-
     <div class="run-ids">
       Run IDs:
       {% for rid in run_ids %}
@@ -142,7 +140,8 @@
   {% else %}
   <div class="empty">
     <div class="icon">🔬</div>
-    <div>No clusters yet. Click <strong>Run Clustering</strong> to analyze failure patterns.</div>
+    <div>No pre-computed clusters found.<br>
+    Run <code>python3 evaluator/clustering.py</code> locally to generate clusters.</div>
   </div>
   {% endif %}
 
@@ -156,14 +155,13 @@ async function runClustering() {
   const btn = document.querySelector('.btn');
   btn.disabled = true;
   btn.textContent = 'Running...';
-
   try {
     const res = await fetch(`/api/clusters/run?agent=${agent}`, { method: 'POST' });
     const data = await res.json();
     if (data.error) {
       status.textContent = '❌ Error: ' + data.error;
     } else {
-      status.textContent = `✅ Done! Found ${data.num_clusters} clusters across ${data.total_failures} runs.`;
+      status.textContent = `✅ Done! Found ${data.num_clusters} clusters.`;
       setTimeout(() => window.location.reload(), 1000);
     }
   } catch(e) {
