@@ -64,9 +64,11 @@
 
     {% if not clustering_available %}
     <div class="info-box">
-      🔬 Failure clustering uses <strong>sentence-transformers + HDBSCAN</strong> and runs locally (GPU recommended).
-      Pre-computed clusters from local analysis are shown below.
-      To re-run clustering, use: <code>python3 evaluator/clustering.py</code>
+      🔬 <strong>How clustering works:</strong>
+      Failed agent outputs are embedded using <strong>sentence-transformers</strong>
+      and grouped with <strong>HDBSCAN</strong> — then each cluster is auto-labeled by an LLM.
+      The clusters below were computed locally and pre-loaded into the dashboard.
+      To refresh clusters, run <code>python3 evaluator/clustering.py</code> locally and redeploy.
     </div>
     {% else %}
     <div class="form-row">
