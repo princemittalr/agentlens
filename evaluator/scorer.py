@@ -1,16 +1,11 @@
 import json
 import sqlite3
 import os
+import time
 from dataclasses import dataclass, asdict
 from typing import List, Optional
 from .rules import run_default_rules, RuleResult
-from .llm_judge import (
-    evaluate_task_success,
-    evaluate_groundedness,
-    evaluate_hallucination,
-    evaluate_coherence,
-    JudgeResult
-)
+from .llm_judge import run_judges_parallel, JudgeResult
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "agentlens.db")
 
@@ -73,25 +68,29 @@ def evaluate_trace(
     context: Optional[str] = None,
     known_facts: Optional[str] = None,
     rubric: Optional[str] = None,
-    run_judge: bool = True
+    run_judge: bool = True,
 ) -> EvalResult:
     _ensure_eval_table()
 
-    # Rule-based
+    # Rule-based (instant)
     rule_results = run_default_rules(output, latency_ms, error)
 
-    # LLM Judge
+    # LLM judges — now parallel
     judge_results = []
     if run_judge and output:
-        print("  Running LLM judges...")
-        judge_results.append(evaluate_task_success(input_query, output, rubric or ""))
-        judge_results.append(evaluate_coherence(output))
-        if context:
-            judge_results.append(evaluate_groundedness(output, context))
-        if known_facts:
-            judge_results.append(evaluate_hallucination(output, known_facts))
+        print("  Running LLM judges (parallel)...")
+        t0 = time.time()
+        judge_results = run_judges_parallel(
+            input_query=input_query,
+            output=output,
+            rubric=rubric or "",
+            context=context,
+            known_facts=known_facts,
+        )
+        elapsed = round(time.time() - t0, 2)
+        print(f"  Judges completed in {elapsed}s ({len(judge_results)} metrics parallel)")
 
-    # Overall score = average of all scores
+    # Overall score
     all_scores = [r.score for r in rule_results] + [r.score for r in judge_results]
     overall_score = round(sum(all_scores) / len(all_scores), 4) if all_scores else 0.0
     passed = overall_score >= 0.7
