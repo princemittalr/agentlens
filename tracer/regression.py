@@ -27,6 +27,7 @@ class RegressionAlert:
     delta_pct: float
     severity: str        # "critical", "warning", "ok"
     message: str
+    p_value: float = 1.0  # Mann-Whitney U p-value
 
 
 @dataclass
@@ -131,7 +132,9 @@ REGRESSION_THRESHOLDS = {
 
 def detect_regressions(
     baseline: Dict[str, MetricSummary],
-    candidate: Dict[str, MetricSummary]
+    candidate: Dict[str, MetricSummary],
+    baseline_raw: Dict[str, list] = None,
+    candidate_raw: Dict[str, list] = None,
 ) -> tuple:
     """Compare baseline vs candidate metrics. Returns (alerts, improvements)."""
     alerts = []
@@ -181,6 +184,13 @@ def detect_regressions(
             else:
                 severity = "ok"
 
+        # Compute p-value if raw scores available
+        p_value = 1.0
+        if baseline_raw and candidate_raw:
+            b_scores = baseline_raw.get(metric, [])
+            c_scores = candidate_raw.get(metric, [])
+            p_value = _mann_whitney_p(b_scores, c_scores)
+
         alert = RegressionAlert(
             metric=metric,
             baseline_mean=b_mean,
@@ -188,7 +198,8 @@ def detect_regressions(
             delta=delta,
             delta_pct=delta_pct,
             severity=severity,
-            message=_build_message(metric, b_mean, c_mean, delta_pct, severity)
+            message=_build_message(metric, b_mean, c_mean, delta_pct, severity, p_value),
+            p_value=p_value,
         )
 
         if severity in ("critical", "warning"):
@@ -199,9 +210,10 @@ def detect_regressions(
     return alerts, improvements
 
 
-def _build_message(metric, baseline, candidate, delta_pct, severity) -> str:
+def _build_message(metric, baseline, candidate, delta_pct, severity, p_value=1.0) -> str:
     direction = "↓ decreased" if candidate < baseline else "↑ increased"
-    return f"{metric}: {direction} by {abs(delta_pct):.1f}% ({baseline:.4f} → {candidate:.4f}) [{severity.upper()}]"
+    sig = f" (p={p_value:.4f})" if p_value < 1.0 else ""
+    return f"{metric}: {direction} by {abs(delta_pct):.1f}% ({baseline:.4f} → {candidate:.4f}) [{severity.upper()}]{sig}"
 
 
 # ─── Main Entry Point ─────────────────────────────────────────────────────────
@@ -228,7 +240,11 @@ def compare_versions(
     baseline_summary = summarize_metrics(baseline_scores)
     candidate_summary = summarize_metrics(candidate_scores)
 
-    alerts, improvements = detect_regressions(baseline_summary, candidate_summary)
+    alerts, improvements = detect_regressions(
+        baseline_summary, candidate_summary,
+        baseline_raw=baseline_scores,
+        candidate_raw=candidate_scores,
+    )
 
     # Overall verdict
     has_critical = any(a.severity == "critical" for a in alerts)
@@ -291,7 +307,9 @@ def _print_report(
         status = alert_map.get(metric, imp_map.get(metric, "ok"))
         icon = {"critical": "🔴", "warning": "🟡", "improvement": "🟢", "ok": "✅"}.get(status, "")
 
-        print(f"  {metric:<20} {b.mean:>10.4f} {c.mean:>10.4f} {delta_pct:>9.1f}% {icon:>8} {status}")
+        alert_obj = {a.metric: a for a in report.alerts + report.improved}.get(metric)
+        p_val = f"{alert_obj.p_value:.4f}" if alert_obj and alert_obj.p_value < 1.0 else "n/a"
+        print(f"  {metric:<20} {b.mean:>10.4f} {c.mean:>10.4f} {delta_pct:>9.1f}% {p_val:>10} {icon:>8} {status}")
 
     if report.alerts:
         print(f"\n  ⚠️  Regressions detected ({len(report.alerts)}):")
@@ -304,3 +322,15 @@ def _print_report(
             print(f"    • {a.message}")
 
     print(f"{'='*65}\n")
+
+
+def _mann_whitney_p(scores_a: list, scores_b: list) -> float:
+    """Mann-Whitney U test — returns p-value. Lower = more significant."""
+    try:
+        from scipy.stats import mannwhitneyu
+        if len(scores_a) < 2 or len(scores_b) < 2:
+            return 1.0  # not enough data
+        _, p = mannwhitneyu(scores_a, scores_b, alternative="two-sided")
+        return round(float(p), 4)
+    except Exception:
+        return 1.0

@@ -356,3 +356,78 @@ async def api_regression(agent: str, baseline: str, candidate: str):
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+import csv
+import io
+from fastapi.responses import StreamingResponse
+
+
+@app.get("/export/json")
+async def export_json():
+    """Export all eval results as JSON."""
+    traces = get_all_traces()
+    evals = get_all_evals()
+    eval_map = {e["run_id"]: e for e in evals}
+
+    export_data = []
+    for t in traces:
+        ev = eval_map.get(t["run_id"])
+        export_data.append({
+            "run_id": t["run_id"],
+            "agent_name": t["agent_name"],
+            "agent_version": t["agent_version"],
+            "model": t["model"],
+            "timestamp": t["timestamp"],
+            "total_latency_ms": t["total_latency_ms"],
+            "total_tokens": t["total_tokens"],
+            "cost_usd": t["cost_usd"],
+            "success": bool(t["success"]),
+            "overall_score": ev["overall_score"] if ev else None,
+            "passed": bool(ev["passed"]) if ev else None,
+            "rule_results": json.loads(ev["rule_results"]) if ev else [],
+            "judge_results": json.loads(ev["judge_results"]) if ev else [],
+        })
+
+    return export_data
+
+
+@app.get("/export/csv")
+async def export_csv():
+    """Export all eval results as CSV."""
+    traces = get_all_traces()
+    evals = get_all_evals()
+    eval_map = {e["run_id"]: e for e in evals}
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Header
+    writer.writerow([
+        "run_id", "agent_name", "agent_version", "model",
+        "timestamp", "latency_ms", "total_tokens", "cost_usd",
+        "success", "overall_score", "passed"
+    ])
+
+    for t in traces:
+        ev = eval_map.get(t["run_id"])
+        writer.writerow([
+            t["run_id"],
+            t["agent_name"],
+            t["agent_version"],
+            t["model"],
+            t["timestamp"],
+            t["total_latency_ms"],
+            t["total_tokens"],
+            t["cost_usd"],
+            bool(t["success"]),
+            ev["overall_score"] if ev else "",
+            bool(ev["passed"]) if ev else "",
+        ])
+
+    output.seek(0)
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode()),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=agentlens_results.csv"}
+    )
