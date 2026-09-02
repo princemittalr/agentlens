@@ -168,14 +168,37 @@ async def clusters_view(request: Request, agent: str = None):
     total_clustered = 0
     noise_count = 0
 
-    if CLUSTERING_AVAILABLE:
-        try:
-            clusters = load_clusters(agent_name=agent or "all")
-            total_clustered = sum(
-                len(json.loads(c["run_ids"])) for c in clusters
-            )
-        except Exception:
-            pass
+    # Always try to load pre-computed clusters from DB
+    # regardless of whether live clustering is available
+    try:
+        if CLUSTERING_AVAILABLE:
+            from evaluator.clustering import load_clusters as _load
+        else:
+            # Inline loader that doesn't need sentence-transformers
+            import sqlite3 as _sq
+            def _load(agent_name=None):
+                db = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agentlens.db")
+                conn = _sq.connect(db)
+                conn.row_factory = _sq.Row
+                if agent_name and agent_name != "all":
+                    rows = conn.execute(
+                        "SELECT * FROM failure_clusters WHERE agent_name = ? ORDER BY size DESC",
+                        (agent_name,)
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT * FROM failure_clusters ORDER BY size DESC"
+                    ).fetchall()
+                conn.close()
+                return [dict(r) for r in rows]
+
+        clusters = _load(agent_name=agent or "all")
+        total_clustered = sum(
+            len(json.loads(c["run_ids"])) for c in clusters
+        )
+    except Exception as e:
+        print(f"Cluster load error: {e}")
+        pass
 
     return render("clusters.html", {
         "clusters": clusters,
