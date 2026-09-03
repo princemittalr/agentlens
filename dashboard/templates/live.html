@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Live Monitor — AgentLens</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; }
+  .topbar { background: #1a1d2e; border-bottom: 1px solid #2d3748; padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
+  .topbar h1 { font-size: 20px; font-weight: 700; color: #7c3aed; }
+  .nav { display: flex; gap: 4px; margin-left: auto; }
+  .nav a { padding: 6px 14px; border-radius: 6px; text-decoration: none; color: #94a3b8; font-size: 13px; font-weight: 500; }
+  .nav a:hover, .nav a.active { background: #7c3aed22; color: #a78bfa; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 32px; }
+  .status-bar { display: flex; align-items: center; gap: 16px; background: #1a1d2e; border: 1px solid #2d3748; border-radius: 12px; padding: 16px 24px; margin-bottom: 24px; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #34d399; animation: pulse 2s infinite; flex-shrink: 0; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .status-text { font-size: 13px; color: #94a3b8; }
+  .status-text strong { color: #e2e8f0; }
+  .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+  .stat { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 10px; padding: 16px 20px; }
+  .stat .lbl { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px; }
+  .stat .val { font-size: 24px; font-weight: 700; color: #a78bfa; transition: color 0.3s; }
+  .stat .val.flash { color: #34d399; }
+  .feed-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .feed-title { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: #64748b; }
+  .controls { display: flex; gap: 8px; align-items: center; }
+  .clear-btn { background: #1e2235; border: none; color: #64748b; padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  .clear-btn:hover { color: #e2e8f0; }
+  .poll-label { font-size: 11px; color: #4a5568; }
+  .feed { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 12px; min-height: 400px; overflow: hidden; }
+  .feed-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 400px; color: #64748b; }
+  .feed-empty .icon { font-size: 48px; margin-bottom: 12px; }
+  .feed-empty .msg { font-size: 14px; }
+  .feed-empty .sub { font-size: 12px; color: #4a5568; margin-top: 6px; }
+  .event { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid #1e2235; animation: slideIn 0.4s ease; }
+  @keyframes slideIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+  .event:last-child { border-bottom: none; }
+  .event-icon { font-size: 18px; flex-shrink: 0; }
+  .event-main { flex: 1; }
+  .event-title { font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 3px; display: flex; align-items: center; gap: 8px; }
+  .event-meta { font-size: 11px; color: #64748b; display: flex; gap: 12px; margin-top: 4px; }
+  .event-score { text-align: right; min-width: 80px; }
+  .score-val { font-size: 20px; font-weight: 700; }
+  .score-val.high { color: #34d399; }
+  .score-val.mid { color: #fbbf24; }
+  .score-val.low { color: #f87171; }
+  .score-val.pending { color: #64748b; }
+  .score-label { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: 0.6px; }
+  .event-time { font-size: 11px; color: #4a5568; min-width: 80px; text-align: right; }
+  .agent-tag { background: #1e1b4b; color: #a78bfa; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .version-tag { color: #64748b; font-size: 12px; }
+  .new-tag { background: #7c3aed; color: white; padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 700; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+  .badge.pass { background: #064e3b; color: #34d399; }
+  .badge.fail { background: #450a0a; color: #f87171; }
+  .view-link { color: #7c3aed; font-size: 12px; text-decoration: none; }
+  .view-link:hover { color: #a78bfa; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>⬡ AgentLens</h1>
+  <nav class="nav">
+    <a href="/">Runs</a>
+    <a href="/charts">Charts</a>
+    <a href="/live" class="active">Live</a>
+    <a href="/clusters">Clusters</a>
+    <a href="/regression">Regression</a>
+  </nav>
+</div>
+
+<div class="container">
+
+  <div class="status-bar">
+    <div class="status-dot"></div>
+    <div class="status-text">
+      Status: <strong>Live — polling every 2s</strong>
+    </div>
+    <div style="margin-left:auto;font-size:12px;color:#4a5568" id="lastPoll">
+      Initializing...
+    </div>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat">
+      <div class="lbl">New Runs (session)</div>
+      <div class="val" id="liveCount">0</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Avg Score</div>
+      <div class="val" id="liveAvgScore">—</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Avg Latency</div>
+      <div class="val" id="liveAvgLatency">—</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Session Cost</div>
+      <div class="val" id="liveTotalCost">$0</div>
+    </div>
+  </div>
+
+  <div class="feed-header">
+    <div class="feed-title">Live Event Feed</div>
+    <div class="controls">
+      <span class="poll-label" id="pollStatus">⏳ polling...</span>
+      <button class="clear-btn" onclick="clearFeed()">Clear</button>
+    </div>
+  </div>
+
+  <div class="feed" id="feed">
+    <div class="feed-empty" id="emptyState">
+      <div class="icon">📡</div>
+      <div class="msg">Waiting for agent runs...</div>
+      <div class="sub">Run any agent — traces will appear here automatically</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// Track seen run IDs to avoid duplicates
+let seenIds = new Set();
+let sessionScores = [];
+let sessionLatencies = [];
+let sessionCost = 0;
+let isFirstPoll = true;
+
+async function poll() {
+  try {
+    const res = await fetch('/api/live/recent');
+    const data = await res.json();
+
+    document.getElementById('lastPoll').textContent =
+      'Last poll: ' + new Date().toLocaleTimeString();
+    document.getElementById('pollStatus').textContent = '✅ connected';
+
+    const newItems = data.filter(item => !seenIds.has(item.run_id));
+
+    if (isFirstPoll) {
+      // On first load, mark all existing as seen (don't show old runs)
+      data.forEach(item => seenIds.add(item.run_id));
+      isFirstPoll = false;
+      return;
+    }
+
+    // Add new items to feed (newest first)
+    newItems.reverse().forEach(item => addToFeed(item));
+
+  } catch(e) {
+    document.getElementById('pollStatus').textContent = '❌ error';
+  }
+}
+
+function addToFeed(item) {
+  seenIds.add(item.run_id);
+
+  // Hide empty state
+  document.getElementById('emptyState').style.display = 'none';
+
+  // Update session stats
+  sessionLatencies.push(item.total_latency_ms);
+  sessionCost += item.cost_usd;
+  if (item.overall_score !== null) sessionScores.push(item.overall_score);
+
+  const count = sessionLatencies.length;
+  const avgLat = Math.round(sessionLatencies.reduce((a,b) => a+b, 0) / count);
+  const avgScore = sessionScores.length
+    ? (sessionScores.reduce((a,b) => a+b, 0) / sessionScores.length).toFixed(3)
+    : '—';
+
+  flashUpdate('liveCount', count);
+  flashUpdate('liveAvgLatency', avgLat + 'ms');
+  flashUpdate('liveTotalCost', '$' + sessionCost.toFixed(5));
+  if (sessionScores.length) flashUpdate('liveAvgScore', avgScore);
+
+  // Determine score display
+  const score = item.overall_score;
+  let scoreClass = 'pending';
+  let scoreText = '—';
+  let scoreLabel = 'no eval';
+  if (score !== null) {
+    scoreText = score.toFixed(3);
+    scoreLabel = item.eval_passed ? '✓ PASSED' : '✗ FAILED';
+    scoreClass = score >= 0.8 ? 'high' : score >= 0.6 ? 'mid' : 'low';
+  }
+
+  const feed = document.getElementById('feed');
+  const div = document.createElement('div');
+  div.className = 'event';
+  div.innerHTML = `
+    <div class="event-icon">${item.success ? '✅' : '❌'}</div>
+    <div class="event-main">
+      <div class="event-title">
+        <span class="agent-tag">${item.agent_name}</span>
+        <span class="version-tag">${item.agent_version}</span>
+        <span class="new-tag">NEW</span>
+      </div>
+      <div class="event-meta">
+        <span>⏱ ${item.total_latency_ms}ms</span>
+        <span>🪙 ${item.total_tokens} tok</span>
+        <span>💰 $${item.cost_usd.toFixed(6)}</span>
+        <span>🤖 ${item.model}</span>
+      </div>
+    </div>
+    <div class="event-score">
+      <div class="score-val ${scoreClass}">${scoreText}</div>
+      <div class="score-label">${scoreLabel}</div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:90px">
+      <div class="event-time">${new Date(item.timestamp).toLocaleTimeString()}</div>
+      <a class="view-link" href="/trace/${item.run_id}">View →</a>
+    </div>
+  `;
+
+  // Insert at top
+  const firstEvent = feed.querySelector('.event');
+  if (firstEvent) {
+    feed.insertBefore(div, firstEvent);
+  } else {
+    feed.appendChild(div);
+  }
+
+  // Keep only last 50
+  const allEvents = feed.querySelectorAll('.event');
+  if (allEvents.length > 50) allEvents[allEvents.length - 1].remove();
+}
+
+function flashUpdate(id, value) {
+  const el = document.getElementById(id);
+  el.textContent = value;
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 600);
+}
+
+function clearFeed() {
+  const feed = document.getElementById('feed');
+  feed.innerHTML = `
+    <div class="feed-empty" id="emptyState">
+      <div class="icon">📡</div>
+      <div class="msg">Feed cleared — waiting for new runs...</div>
+      <div class="sub">Run any agent — traces will appear here automatically</div>
+    </div>`;
+  // Mark all current as seen so we only show truly new ones
+  sessionScores = []; sessionLatencies = []; sessionCost = 0;
+  document.getElementById('liveCount').textContent = '0';
+  document.getElementById('liveAvgScore').textContent = '—';
+  document.getElementById('liveAvgLatency').textContent = '—';
+  document.getElementById('liveTotalCost').textContent = '$0';
+  // Re-seed seen IDs
+  fetch('/api/live/recent').then(r => r.json()).then(data => {
+    data.forEach(item => seenIds.add(item.run_id));
+  });
+}
+
+// Poll every 2 seconds
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

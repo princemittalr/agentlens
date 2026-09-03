@@ -431,3 +431,81 @@ async def export_csv():
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=agentlens_results.csv"}
     )
+
+
+# ─── WebSocket ────────────────────────────────────────────────────────────────
+
+import asyncio
+from fastapi import WebSocket, WebSocketDisconnect
+from dashboard.ws_manager import manager
+from tracer.database import set_ws_callback
+
+
+@app.on_event("startup")
+async def startup():
+    """Register WebSocket broadcast callback with the tracer database."""
+    set_ws_callback(manager.broadcast)
+    print("  AgentLens: WebSocket manager registered")
+
+
+@app.get("/live", response_class=HTMLResponse)
+async def live_view(request: Request):
+    return render("live.html", {})
+
+
+@app.websocket("/ws/live")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        # Send current stats on connect
+        traces = get_all_traces()
+        evals = get_all_evals()
+        await manager.send_personal(websocket, "init", {
+            "total_runs": len(traces),
+            "total_evals": len(evals),
+        })
+
+        # Keep connection alive — handle ping/pong
+        while True:
+            try:
+                data = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=60.0
+                )
+                msg = json.loads(data)
+                if msg.get("type") == "ping":
+                    await manager.send_personal(websocket, "pong", {})
+            except asyncio.TimeoutError:
+                # Send keepalive ping
+                await manager.send_personal(websocket, "ping", {})
+
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception as e:
+        manager.disconnect(websocket)
+
+
+@app.get("/api/live/recent")
+async def api_live_recent():
+    """Return last 20 traces with eval scores — used by live polling."""
+    traces = get_all_traces()[:20]
+    evals = get_all_evals()
+    eval_map = {e["run_id"]: e for e in evals}
+
+    result = []
+    for t in traces:
+        ev = eval_map.get(t["run_id"])
+        result.append({
+            "run_id": t["run_id"],
+            "agent_name": t["agent_name"],
+            "agent_version": t["agent_version"],
+            "model": t["model"],
+            "timestamp": t["timestamp"],
+            "total_latency_ms": t["total_latency_ms"],
+            "total_tokens": t["total_tokens"],
+            "cost_usd": t["cost_usd"],
+            "success": bool(t["success"]),
+            "overall_score": ev["overall_score"] if ev else None,
+            "eval_passed": bool(ev["passed"]) if ev else None,
+        })
+    return result

@@ -45,6 +45,15 @@ def init_db():
     print("Database initialized at agentlens.db")
 
 
+# WebSocket broadcast callback — set by dashboard on startup
+_ws_broadcast_callback = None
+
+
+def set_ws_callback(callback):
+    global _ws_broadcast_callback
+    _ws_broadcast_callback = callback
+
+
 def save_trace(trace: AgentTrace):
     conn = get_connection()
     cursor = conn.cursor()
@@ -74,6 +83,8 @@ def save_trace(trace: AgentTrace):
 
     conn.commit()
     conn.close()
+
+
 
 
 def get_all_traces() -> List[dict]:
